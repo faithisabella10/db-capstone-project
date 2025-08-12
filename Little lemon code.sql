@@ -108,3 +108,268 @@ CREATE TABLE OrderDeliveryStatus (
     FOREIGN KEY (order_id) REFERENCES Orders(order_id)
     ON UPDATE CASCADE ON DELETE CASCADE
 );
+show databases;
+
+CREATE OR REPLACE VIEW OrdersView AS
+SELECT
+  o.order_id,
+  SUM(oi.quantity) AS total_quantity,
+  o.total_cost
+FROM Orders o
+JOIN OrderItems oi
+  ON oi.order_id = o.order_id
+GROUP BY o.order_id, o.total_cost
+HAVING SUM(oi.quantity) > 2;
+SELECT * FROM OrdersView;
+
+SELECT
+  c.customer_id,
+  CONCAT(c.first_name, ' ', c.last_name) AS full_name,
+  o.order_id,
+  o.total_cost,
+  -- all Course items in the order
+  GROUP_CONCAT(
+    CASE WHEN mi.category = 'Course' THEN mi.item_name END
+    ORDER BY mi.item_name
+    SEPARATOR ', '
+  ) AS course_names,
+  -- all Starter items in the order
+  GROUP_CONCAT(
+    CASE WHEN mi.category = 'Starter' THEN mi.item_name END
+    ORDER BY mi.item_name
+    SEPARATOR ', '
+  ) AS starter_names
+FROM Orders o
+JOIN Customers c
+  ON c.customer_id = o.customer_id
+JOIN OrderItems oi
+  ON oi.order_id = o.order_id
+JOIN MenuItems mi
+  ON mi.menu_item_id = oi.menu_item_id
+WHERE o.total_cost > 150
+GROUP BY
+  c.customer_id, full_name, o.order_id, o.total_cost
+ORDER BY o.total_cost ASC;
+
+SELECT m.item_name
+FROM MenuItems m
+WHERE m.menu_item_id = ANY (
+  SELECT oi.menu_item_id
+  FROM OrderItems oi
+  WHERE oi.quantity > 2
+);
+
+DELIMITER $$
+
+CREATE PROCEDURE GetMaxQuantity()
+BEGIN
+    SELECT MAX(quantity) AS MaxQuantity
+    FROM OrderItems;
+END $$
+
+DELIMITER ;
+
+-- Test
+CALL GetMaxQuantity();
+
+-- Create prepared statement
+PREPARE GetOrderDetail 
+FROM '
+SELECT 
+    o.order_id,
+    SUM(oi.quantity) AS total_quantity,
+    o.total_cost
+FROM Orders o
+JOIN OrderItems oi
+  ON o.order_id = oi.order_id
+WHERE o.customer_id = ?
+GROUP BY o.order_id, o.total_cost
+';
+
+-- Set variable and execute
+SET @id = 1;
+EXECUTE GetOrderDetail USING @id;
+
+DELIMITER $$
+
+CREATE PROCEDURE CancelOrder(IN p_order_id INT)
+BEGIN
+    DELETE FROM Orders
+    WHERE order_id = p_order_id;
+END $$
+
+DELIMITER ;
+
+-- Test
+CALL CancelOrder(3);  -- deletes order with ID 3
+
+INSERT INTO Bookings
+  (booking_id, booking_datetime, table_id, customer_id, party_size)
+VALUES
+  (1, '2022-10-10', 5, 1, 2),
+  (2, '2022-11-12', 3, 3, 4),
+  (3, '2022-10-11', 2, 2, 3),
+  (4, '2022-10-13', 2, 1, 2);
+
+DELIMITER $$
+
+CREATE PROCEDURE CheckBooking(
+    IN p_booking_date DATE,
+    IN p_table_id INT
+)
+BEGIN
+    DECLARE booking_status VARCHAR(255);
+
+    IF EXISTS (
+        SELECT 1
+        FROM Bookings
+        WHERE booking_datetime = p_booking_date
+          AND table_id = p_table_id
+    ) THEN
+        SET booking_status = CONCAT('Table ', p_table_id, ' is already booked');
+    ELSE
+        SET booking_status = CONCAT('Table ', p_table_id, ' is available');
+    END IF;
+
+    SELECT booking_status AS 'Booking status';
+END $$
+
+DELIMITER ;
+
+-- Example test:
+CALL CheckBooking('2022-11-12', 3);
+
+
+DELIMITER $$
+
+USE LittleLemonDB;
+
+DELIMITER $$
+
+DROP PROCEDURE IF EXISTS AddValidBooking $$
+CREATE PROCEDURE AddValidBooking(
+    IN p_booking_date DATE,
+    IN p_table_id INT,
+    IN p_customer_id INT
+)
+BEGIN
+    DECLARE booking_count INT;
+
+    START TRANSACTION;
+
+    SELECT COUNT(*)
+      INTO booking_count
+      FROM Bookings
+     WHERE booking_datetime = p_booking_date
+       AND table_id = p_table_id;
+
+    IF booking_count > 0 THEN
+        ROLLBACK;
+        SELECT CONCAT('Table ', p_table_id, ' is already booked - booking canceled') AS 'Booking status';
+    ELSE
+        -- choose a party_size (example: 2). Adjust as needed or add as a 4th param.
+        INSERT INTO Bookings (booking_datetime, table_id, customer_id, party_size)
+        VALUES (p_booking_date, p_table_id, p_customer_id, 2);
+        COMMIT;
+        SELECT CONCAT('Table ', p_table_id, ' successfully booked') AS 'Booking status';
+    END IF;
+END $$
+DELIMITER ;
+
+-- 
+CALL AddValidBooking('2022-12-17', 6, 2);
+
+
+DELIMITER ;
+
+-- Example test:
+CALL AddValidBooking('2022-12-17', 6, 2);
+
+DELIMITER $$
+
+CREATE PROCEDURE AddBooking(
+    IN p_booking_id INT,
+    IN p_customer_id INT,
+    IN p_table_id INT,
+    IN p_booking_date DATE
+)
+BEGIN
+    INSERT INTO Bookings (booking_id, customer_id, table_id, booking_datetime)
+    VALUES (p_booking_id, p_customer_id, p_table_id, p_booking_date);
+
+    SELECT 'New booking added' AS Confirmation;
+END $$
+
+DELIMITER ;
+
+-- Example:
+CALL AddBooking(9, 3, 4, '2022-12-30');
+
+DELIMITER $$
+
+CREATE PROCEDURE UpdateBooking(
+    IN p_booking_id INT,
+    IN p_booking_date DATE
+)
+BEGIN
+    UPDATE Bookings
+    SET booking_datetime = p_booking_date
+    WHERE booking_id = p_booking_id;
+
+    SELECT CONCAT('Booking ', p_booking_id, ' updated') AS Confirmation;
+END $$
+
+DELIMITER ;
+
+-- Example:
+CALL UpdateBooking(9, '2022-12-17');
+
+DELIMITER $$
+
+CREATE PROCEDURE CancelBooking(
+    IN p_booking_id INT
+)
+BEGIN
+    DELETE FROM Bookings
+    WHERE booking_id = p_booking_id;
+
+    SELECT CONCAT('Booking ', p_booking_id, ' cancelled') AS Confirmation;
+END $$
+
+DELIMITER ;
+
+-- Example:
+CALL CancelBooking(9);
+
+SHOW TABLES;
+DESCRIBE customers;
+DESCRIBE orders;
+
+SELECT
+  c.FullName,
+  c.ContactNumber AS Phone,
+  c.Email,
+  o.TotalCost AS BillAmount
+FROM customers AS c
+JOIN orders    AS o
+  ON o.CustomerID = c.CustomerID
+WHERE o.TotalCost > 60
+ORDER BY o.TotalCost DESC;
+
+SELECT
+  CONCAT(c.FirstName,' ',c.LastName) AS FullName,
+  c.PhoneNumber AS Phone,
+  c.Email,
+  o.TotalCost AS BillAmount
+FROM customers AS c
+JOIN orders    AS o
+  ON o.CustomerID = c.CustomerID
+WHERE o.TotalCost > 60
+ORDER BY o.TotalCost DESC;
+
+
+
+
+
+
+
